@@ -1,0 +1,111 @@
+# Ambiente local do CEOM (padrão multi-contêiner do guia GitLab UFFS).
+#
+#   docker compose up --build
+#   front: http://localhost:8080  ·  api: http://localhost:6767/api/health
+#
+# Segredos e o resto da config do backend vêm de backend/.env (veja .env.example).
+# DATABASE_URL e MONGODB_URL apontam para os bancos deste compose; sobrescreva
+# com variáveis de ambiente para usar bancos externos.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    labels: "uffs.log.APP_NAME,uffs.log.APP_VERSION,com.docker.compose.project,com.docker.compose.service,com.docker.compose.container-number,com.docker.compose.oneoff"
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-env: &backend-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql://ceom:ceom@postgres:5432/ceom}
+  MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
+  MONGODB_DB: ${MONGODB_DB:-ceom}
+  PORT: 6767
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ceom
+      POSTGRES_PASSWORD: ceom
+      POSTGRES_DB: ceom
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ceom -d ceom"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    labels:
+      uffs.log.APP_NAME: ceom-postgres
+      uffs.log.APP_VERSION: "17"
+    logging: *logging
+
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    labels:
+      uffs.log.APP_NAME: ceom-mongo
+      uffs.log.APP_VERSION: "7"
+    logging: *logging
+
+  # Migrations do public + tenant-migrations (o que o build do Render fazia).
+  migrate:
+    build: ./backend
+    image: ceom-backend:${APP_VERSION:-latest}
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run tenants:migrate"]
+    env_file: ./backend/.env
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    labels:
+      uffs.log.APP_NAME: ceom-migrate
+      uffs.log.APP_VERSION: ${APP_VERSION:-1.0.0}
+    logging: *logging
+
+  backend:
+    build: ./backend
+    image: ceom-backend:${APP_VERSION:-latest}
+    env_file: ./backend/.env
+    environment: *backend-env
+    ports:
+      - "6767:6767"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      uffs.log.APP_NAME: ceom-backend
+      uffs.log.APP_VERSION: ${APP_VERSION:-1.0.0}
+    logging: *logging
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ""
+    image: ceom-frontend:${APP_VERSION:-latest}
+    environment:
+      BACKEND_URL: http://backend:6767
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      uffs.log.APP_NAME: ceom-frontend
+      uffs.log.APP_VERSION: ${APP_VERSION:-1.0.0}
+    logging: *logging
+
+volumes:
+  postgres-data:
+  mongo-data:

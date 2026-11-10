@@ -1,0 +1,68 @@
+# Override de desenvolvimento: código montado da máquina + hot reload.
+#
+#   docker compose -f compose.yml -f compose.dev.yml up --build
+#
+#   front (Vite): http://localhost:3000
+#   api:          http://localhost:6767/api
+#   postgres:     postgresql://ceom:ceom@localhost:5432/ceom
+#   mongo:        mongodb://localhost:27017
+#
+# node_modules e src/generated ficam em volumes anônimos (vêm da imagem). Mudou
+# package.json ou schema do Prisma? Rode de novo com `--build -V` para recriá-los.
+
+x-backend-dev: &backend-dev
+  build:
+    context: ./backend
+    target: deps
+  image: ceom-backend:dev
+  volumes:
+    - ./backend:/app
+    - /app/node_modules
+    - /app/src/generated
+
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  mongo:
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+
+  migrate:
+    <<: *backend-dev
+
+  backend:
+    <<: *backend-dev
+    command: ["npm", "run", "dev"]
+    environment:
+      NODE_ENV: development
+    # O estágio deps não tem HEALTHCHECK; o frontend depende dele.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6767/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      target: deps
+    image: ceom-frontend:dev
+    command: ["yarn", "dev", "--host", "0.0.0.0"]
+    environment:
+      PORT: 3000
+      # O browser fala direto com a API (CORS liberado no backend).
+      VITE_API_URL: http://localhost:6767
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports: !override
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5

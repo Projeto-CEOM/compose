@@ -1,0 +1,21 @@
+# Override para bancos externos (Supabase, Atlas, servidor da UFFS...):
+# não sobe os contêineres postgres/mongo e tira a dependência deles.
+#
+#   docker compose -f compose.yml -f compose.dev.yml -f compose.external.yml up --build
+#
+# DATABASE_URL e MONGODB_URL vêm do .env da raiz (veja .env.example).
+
+services:
+  postgres:
+    profiles: [local-db]
+
+  mongo:
+    profiles: [local-db]
+
+  migrate:
+    depends_on: !reset []
+
+  backend:
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
